@@ -4,7 +4,7 @@ python3 train_model.py \
             --tpu_name="node-1" \
             --tpu_zone="us-central1-a" \
             --wandb_project="enformer_rampage_ft" \
-            --wandb_user="njaved" \
+            --wandb_user="${WANDB_USER:-default_user}" \
             --wandb_sweep_name="enformer_rampage_ft" \
             --gcs_project="picard-testing-176520" \
             --gcs_path="gs://enformer_baseline/human/tfrecords"\

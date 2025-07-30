@@ -1,47 +1,88 @@
+"""
+EpiBERT ATAC Pre-training Utilities
+==================================
+
+This module contains utilities for pre-training EpiBERT models on ATAC-seq data.
+It provides functions for:
+- Data loading and preprocessing
+- Training and validation step functions
+- Dataset creation and distributed training setup
+- Argument parsing and configuration
+
+Key Functions:
+- return_train_val_functions: Create training/validation step functions
+- return_distributed_iterators: Set up distributed data iterators
+- deserialize_tr/deserialize_val: Data preprocessing functions
+- mask_ATAC_profile: ATAC-seq data masking for training
+
+Author: EpiBERT Team
+"""
+
 import os
 import multiprocessing
 import random
+from pathlib import Path
+from typing import Dict, Tuple, Any, Optional
 import numpy as np
 
-os.environ['TF_ENABLE_EAGER_CLIENT_STREAMING_ENQUEUE']='False'
+# TensorFlow configuration
+os.environ['TF_ENABLE_EAGER_CLIENT_STREAMING_ENQUEUE'] = 'False'
 import tensorflow as tf
 from tensorflow import strings as tfs
-import src.metrics as metrics 
-import src.utils
-from src.losses import poisson_multinomial
-from src.shared_dataset_utils import build_tfrecord_dataset
 
-# -----------------------------------------------------------------------------
-# Shared helpers (de-duplicated from both training utility modules)
-# -----------------------------------------------------------------------------
-from src.shared_training_utils import (
+# EpiBERT modules
+from epibert import metrics 
+from epibert import utils
+from epibert.losses import poisson_multinomial
+from epibert.shared_dataset_utils import build_tfrecord_dataset
+
+# Shared utilities (deduplicated from both training modules)
+from epibert.shared_training_utils import (
     tf_tpu_initialize as _tf_tpu_initialize,
     one_hot as _one_hot,
     log2 as _log2,
     early_stopping as _early_stopping,
 )
 
-# Re-export under original names so downstream code remains unchanged
+# Re-export under original names for backward compatibility
 tf_tpu_initialize = _tf_tpu_initialize  # type: ignore
 one_hot = _one_hot  # type: ignore
 log2 = _log2  # type: ignore
 early_stopping = _early_stopping  # type: ignore
 
+# Global TensorFlow configuration
 tf.keras.backend.set_floatx('float32')
 
-def return_train_val_functions(model, optimizer,
-                               strategy, metric_dict, num_replicas,
-                               loss_type,total_weight=0.15,unmask_loss=False):
-    """Return training, validation, and build step functions
+# =============================================================================
+# TRAINING AND VALIDATION FUNCTIONS
+# =============================================================================
+
+def return_train_val_functions(model: tf.keras.Model,
+                               optimizer: tf.keras.optimizers.Optimizer,
+                               strategy: tf.distribute.Strategy,
+                               metric_dict: Dict[str, tf.keras.metrics.Metric],
+                               num_replicas: int,
+                               loss_type: str,
+                               total_weight: float = 0.15,
+                               unmask_loss: bool = False) -> Tuple[Any, Any, Any]:
+    """
+    Create training, validation, and build step functions for distributed training.
+    
+    This function sets up the core training loop components including loss computation,
+    gradient updates, and metric tracking for ATAC-seq pre-training.
+    
     Args:
-        model: the input genformer model
-        optimizer: input optimizer, e.g. Adam
-        strategy: input distribution strategy
-        metric_dict: dictionary of metrics to track
-        num_replicas: num replicas for distributed training
-        gradient_clip: gradient clipping value
-        loss_type: poisson or poisson_multinomial
-        total_weight: total weight for the poisson_multinomial loss
+        model: EpiBERT model for ATAC-seq pre-training
+        optimizer: Optimizer (e.g., Adam) for gradient updates
+        strategy: Distribution strategy for multi-GPU/TPU training
+        metric_dict: Dictionary of metrics to track during training
+        num_replicas: Number of replicas for distributed training
+        loss_type: Loss function type ('poisson' or 'poisson_multinomial')
+        total_weight: Weight for poisson_multinomial loss (default: 0.15)
+        unmask_loss: Whether to include unmasked regions in loss (default: False)
+        
+    Returns:
+        Tuple of (train_step, val_step, build_step) functions
     """
 
     # initialize metrics
@@ -137,26 +178,57 @@ def return_train_val_functions(model, optimizer,
     return dist_train_step,dist_val_step,build_step,metric_dict
 
 @tf.function
-def deserialize_tr(serialized_example, g, use_motif_activity,
-                   input_length = 524288, max_shift = 4, output_length_ATAC = 131072,
-                   output_length = 4096, crop_size = 2, output_res = 128,
-                   atac_mask_dropout = 0.15, mask_size = 1536, log_atac = False,
-                   use_atac = True, use_seq = True, atac_corrupt_rate = 20, mask_noise=False):
+def deserialize_tr(serialized_example: tf.Tensor,
+                   g: tf.random.Generator,
+                   use_motif_activity: bool,
+                   input_length: int = 524288,
+                   max_shift: int = 4,
+                   output_length_ATAC: int = 131072,
+                   output_length: int = 4096,
+                   crop_size: int = 2,
+                   output_res: int = 128,
+                   atac_mask_dropout: float = 0.15,
+                   mask_size: int = 1536,
+                   log_atac: bool = False,
+                   use_atac: bool = True,
+                   use_seq: bool = True,
+                   atac_corrupt_rate: int = 20,
+                   mask_noise: bool = False) -> Dict[str, tf.Tensor]:
     """
-    Deserialize a serialized example from a TFRecordFile and apply various transformations
-    and augmentations to the data. Among these, the input atac profile will have one atac peak
-    masked, atac_mask_dropout percentage of the remaining profile will also be masked, and the
-    sequence/targets will be randomly shifted and reverse complemented.
-
-    Parameters:
-    - serialized_example: Serialized example from a TFRecord file.
-    - g: TensorFlow random number generator.
-    - use_motif_activity: Whether to use TF activity  or provide random noise for ablations
-    - input_length: expected length of input sequence
-    - max_shift: maximum number of bases to shift the input sequence
-    - output_length_ATAC: expected length of the ATAC profile
-    - output_length: expected length of the target ATAC profile (should be output_length_ATAC // output_res)
-    - crop_size: number of bins to crop from the edges of the target ATAC profile
+    Deserialize and preprocess training data from TFRecords.
+    
+    This function handles the complete preprocessing pipeline for training data including:
+    - Sequence and ATAC-seq data extraction from TFRecords
+    - Data augmentation (random shifts, reverse complement, masking)
+    - ATAC-seq peak masking for self-supervised learning
+    - Motif activity integration
+    - Normalization and scaling
+    
+    The masking strategy involves:
+    1. Masking one random ATAC peak completely
+    2. Additional dropout masking of atac_mask_dropout% of remaining profile
+    3. Random shifts and reverse complementation for augmentation
+    
+    Args:
+        serialized_example: Serialized tf.train.Example from TFRecord file
+        g: TensorFlow random number generator for reproducible augmentation
+        use_motif_activity: Whether to use TF motif activity or random noise
+        input_length: Length of input DNA sequence (default: 524288)
+        max_shift: Maximum random shift for data augmentation (default: 4)
+        output_length_ATAC: Length of ATAC-seq profile (default: 131072)
+        output_length: Length of target profile (default: 4096)
+        crop_size: Number of bins to crop from profile edges (default: 2)
+        output_res: Output resolution in base pairs (default: 128)
+        atac_mask_dropout: Dropout rate for additional ATAC masking (default: 0.15)
+        mask_size: Size of primary mask in bins (default: 1536)
+        log_atac: Whether to log-transform ATAC data (default: False)
+        use_atac: Whether to include ATAC-seq data (default: True)
+        use_seq: Whether to include DNA sequence data (default: True)
+        atac_corrupt_rate: Corruption rate for ATAC augmentation (default: 20)
+        mask_noise: Whether to add noise to masked regions (default: False)
+        
+    Returns:
+        Dictionary containing processed inputs and targets for training
     - output_res: resolution of the target ATAC profile, default is 128
     - atac_mask_dropout: percentage of the target ATAC profile to mask
     - mask_size: size of the masked region in the target ATAC profile, expressed as number of bp
@@ -718,12 +790,33 @@ def mask_ATAC_profile(output_length_ATAC, output_length, crop_size, mask_size,ou
 
 
 
-with open('src/motif_means_norm.tsv', 'r') as file:
+# Dynamic path resolution for project files
+import os
+from pathlib import Path
+
+def get_project_root():
+    """Find the EpiBERT project root directory."""
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / 'src').exists() and (parent / 'requirements.txt').exists():
+            return parent
+    # Fallback: assume we're in the project root if src/ exists relative to cwd
+    if Path('src').exists():
+        return Path.cwd()
+    raise FileNotFoundError("Could not find EpiBERT project root")
+
+PROJECT_ROOT = get_project_root()
+
+# Load motif normalization data with dynamic paths
+motif_means_path = PROJECT_ROOT / 'src' / 'motif_means_norm.tsv'
+motif_std_path = PROJECT_ROOT / 'src' / 'motif_std_norm.tsv'
+
+with open(motif_means_path, 'r') as file:
     lines = file.readlines()
 data = [list(map(float, line.strip().split(','))) for line in lines]
 motif_means = tf.cast(np.array(data),dtype=tf.float32)
 
-with open('src/motif_std_norm.tsv', 'r') as file:
+with open(motif_std_path, 'r') as file:
     lines = file.readlines()
 data = [list(map(float, line.strip().split(','))) for line in lines]
 motif_std = tf.cast(np.array(data),dtype=tf.float32)

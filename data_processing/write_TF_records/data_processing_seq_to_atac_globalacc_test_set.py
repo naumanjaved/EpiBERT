@@ -191,7 +191,9 @@ def main():
     ####### load in motif activity
     command = "grep 'consensus_pwms.meme' " + args.motif_activity + " | grep 'AC' | awk '{print $3,$15}' | sort -k1,1 | awk '{print $2*-1}' > ranks.tsv"
     subprocess.call(command,shell=True)
-    in_file = open("ranks.tsv",'r')
+    # Use temporary file in current directory or specified output directory
+    ranks_file = os.path.join(os.getcwd(), "ranks.tsv")
+    in_file = open(ranks_file, 'r')
     lst = []
     for line in in_file.readlines():
         lst.append(float(line.rstrip('\n').split('\t')[-1]))

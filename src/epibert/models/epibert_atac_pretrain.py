@@ -2,39 +2,36 @@ from typing import Any, Callable, Dict, Optional, Text, Union, Iterable
 import tensorflow.experimental.numpy as tnp
 import tensorflow as tf
 from tensorflow.keras import layers as kl
-from src.layers.layers import *
+from epibert.layers.layers import *
 import tensorflow_addons as tfa
 from tensorflow.keras import regularizers
 from tensorflow.keras.layers.experimental import SyncBatchNormalization as syncbatchnorm
 
 @tf.keras.utils.register_keras_serializable()
-class epibert(tf.keras.Model):
+class epibert_atac_pretrain(tf.keras.Model):
     def __init__(self,
                  kernel_transformation = 'relu_kernel_transformation',
-                 dropout_rate: float = 0.2,
-                 pointwise_dropout_rate: float = 0.2,
+                 dropout_rate: float = 0.20,
+                 pointwise_dropout_rate: float = 0.10,
                  input_length: int = 524288,
                  output_length: int = 4096,
                  final_output_length: int = 4092,
-                 num_heads:int = 4,
-                 numerical_stabilizer: float =0.001,
-                 num_transformer_layers:int = 7,
+                 num_heads:int = 8,
+                 numerical_stabilizer=0.0000001,
+                 num_transformer_layers:int = 8,
                  norm=True,
-                 max_seq_length:int = 1536,
+                 max_seq_length:int = 4096,
                  BN_momentum: float = 0.90,
                  use_rot_emb: bool =True,
                  normalize: bool = True,
-                 seed: int = 3,
-                 filter_list_seq: list = [768, 896, 1024, 1024, 1152, 1280],
+                 seed: int = 19,
+                 filter_list_seq=[512,640,640,768,896,1024],
                  filter_list_atac: list = [32, 64],
                  final_point_scale: int = 6,
                  num_motifs: int = 693,
                  motif_dropout_rate: float = 0.25,
                  motif_units_fc: int = 32,
                  name: str = 'epibert',
-                 load_init: bool=False,
-                 inits=None,
-                 predict_atac=True,
                  **kwargs):
         """
         epibert model takes as input sequence, masked ATAC seq, and TF 
@@ -71,7 +68,7 @@ class epibert(tf.keras.Model):
           name: model name
         """
 
-        super(epibert, self).__init__(name=name,**kwargs)
+        super(epibert_atac_pretrain, self).__init__(name=name,**kwargs)
         self.kernel_transformation = kernel_transformation
         self.dropout_rate = dropout_rate
         self.pointwise_dropout_rate = pointwise_dropout_rate
@@ -89,55 +86,39 @@ class epibert(tf.keras.Model):
         self.filter_list_seq = filter_list_seq
         self.filter_list_atac=filter_list_atac
         self.BN_momentum = BN_momentum
-        self.load_init = load_init
-        self.inits = inits
         self.final_point_scale = final_point_scale
         self.num_motifs = num_motifs
         self.motif_units_fc = motif_units_fc
         self.motif_dropout_rate= motif_dropout_rate
-        self.predict_atac=predict_atac
 
-        self.hidden_size=self.filter_list_seq[-1]# + self.filter_list_atac[-1] + (self.motif_units_fc//4)
-        self.d_model = self.filter_list_seq[-1] #+ self.filter_list_atac[-1] + (self.motif_units_fc//4)
+        self.hidden_size=self.filter_list_seq[-1]
+        self.d_model = self.filter_list_seq[-1]
 
         self.dim = self.hidden_size  // self.num_heads
 
         # convolutional stem for sequence input 
         self.stem_conv = tf.keras.layers.Conv1D(
-            filters= int(self.filter_list_seq[0]),
+            filters= int(self.filter_list_seq[0]), 
             kernel_size=15,
-            kernel_initializer=self.inits['stem_conv_k'] if self.load_init else 'lecun_normal',
-            bias_initializer=self.inits['stem_conv_b'] if self.load_init else 'zeros',
+            kernel_initializer='lecun_normal',
+            bias_initializer='zeros',
             strides=1,
             padding='same')
-        self.stem_res_conv=Residual(conv_block(int(self.filter_list_seq[0]), 1,
-                                                beta_init=self.inits['stem_res_conv_BN_b'] if self.load_init else None,
-                                                gamma_init=self.inits['stem_res_conv_BN_g'] if self.load_init else None,
-                                                mean_init=self.inits['stem_res_conv_BN_m'] if self.load_init else None,
-                                                var_init=self.inits['stem_res_conv_BN_v'] if self.load_init else None,
-                                                k_init=self.inits['stem_res_conv_k'] if self.load_init else None,
-                                                b_init=self.inits['stem_res_conv_b'] if self.load_init else None,
-                                                BN_momentum=self.BN_momentum,
-                                                name='pointwise_conv_block'))
-        self.stem_pool = SoftmaxPooling1D(name='stem_pool',
-                                          kernel_init=self.inits['stem_pool_k'] if self.load_init else None)
+        self.stem_res_conv=Residual(conv_block(int(self.filter_list_seq[0]), 1, 
+                                                    BN_momentum=self.BN_momentum,
+                                                    name='pointwise_conv_block'))
+        self.stem_pool = SoftmaxPooling1D(name='stem_pool')
 
         # convolutional stem for ATAC profile
         self.stem_conv_atac = tf.keras.layers.Conv1D(
             filters=32,
             kernel_size=50,
-            kernel_initializer=self.inits['stem_conv_atac_k'] if self.load_init else 'lecun_normal',
-            bias_initializer=self.inits['stem_conv_atac_b'] if self.load_init else 'zeros',
+            kernel_initializer='lecun_normal',
+            bias_initializer='zeros',
             strides=1,
             dilation_rate=1,
             padding='same')
         self.stem_res_conv_atac =Residual(conv_block(32, 1,
-                                                    beta_init=self.inits['stem_res_conv_atac_BN_b'] if self.load_init else None,
-                                                    gamma_init=self.inits['stem_res_conv_atac_BN_g'] if self.load_init else None,
-                                                    mean_init=self.inits['stem_res_conv_atac_BN_m'] if self.load_init else None,
-                                                    var_init=self.inits['stem_res_conv_atac_BN_v'] if self.load_init else None,
-                                                    k_init=self.inits['stem_res_conv_atac_k'] if self.load_init else None,
-                                                    b_init=self.inits['stem_res_conv_atac_b'] if self.load_init else None,
                                                     BN_momentum=self.BN_momentum,
                                                     name='pointwise_conv_block_atac'))
         self.stem_pool_atac = tf.keras.layers.MaxPooling1D(pool_size=2)
@@ -149,15 +130,9 @@ class epibert(tf.keras.Model):
                                width=5,
                                stride=1,
                                BN_momentum=self.BN_momentum,
-                               beta_init=self.inits['BN1_b_' + str(i)] if self.load_init else None,
-                               gamma_init=self.inits['BN1_g_' + str(i)] if self.load_init else None,
-                               mean_init=self.inits['BN1_m_' + str(i)] if self.load_init else None,
-                               var_init=self.inits['BN1_v_' + str(i)] if self.load_init else None,
-                               k_init=self.inits['conv1_k_' + str(i)] if self.load_init else None,
-                               b_init=self.inits['conv1_b_' + str(i)] if self.load_init else None,
                                padding='same'),
-                SoftmaxPooling1D(kernel_init=self.inits['soft_max_pool_k_' + str(i)] if self.load_init else None,
-                                 name=f'soft_max_pool_{i}')],
+                #tf.keras.layers.MaxPooling1D(pool_size=2)],   
+                SoftmaxPooling1D(name=f'soft_max_pool_{i}')],
                        name=f'conv_tower_block_{i}')
             for i, num_filters in enumerate(self.filter_list_seq)], name='conv_tower')
 
@@ -169,40 +144,34 @@ class epibert(tf.keras.Model):
                                dilation_rate=1,
                                stride=1,
                                BN_momentum=self.BN_momentum,
-                               beta_init=self.inits['BN_at1_b_' + str(i)] if self.load_init else None,
-                               gamma_init=self.inits['BN_at1_g_' + str(i)] if self.load_init else None,
-                               mean_init=self.inits['BN_at1_m_' + str(i)] if self.load_init else None,
-                               var_init=self.inits['BN_at1_v_' + str(i)] if self.load_init else None,
-                               k_init=self.inits['conv_at1_k_' + str(i)] if self.load_init else None,
-                               b_init=self.inits['conv_at1_b_' + str(i)] if self.load_init else None,
                                padding='same'),
                 tf.keras.layers.MaxPooling1D(pool_size=4)],
                        name=f'conv_tower_block_atac_{i}')
             for i, num_filters in enumerate(self.filter_list_atac)], name='conv_tower_atac')
 
         # dropout for TF activity
-        self.motif_dropout1=kl.Dropout( rate=self.motif_dropout_rate, **kwargs)
-        # dense layer for TF activity
+        self.motif_dropout1=kl.Dropout(rate=self.motif_dropout_rate, **kwargs)
+        self.motif_dropout2=kl.Dropout(rate=self.motif_dropout_rate/4, **kwargs)
+        # dense layer for motif activity
         self.motif_activity_fc1 = kl.Dense(
             self.motif_units_fc,
             activation='gelu',
-            kernel_initializer=self.inits['tf_activity_fc1_k'] if (self.load_init) else 'lecun_normal',
-            bias_initializer=self.inits['tf_activity_fc1_b'] if (self.load_init) else 'zeros',
+            kernel_initializer='lecun_normal',
+            bias_initializer='zeros',
             use_bias=True)
-        self.motif_dropout2=kl.Dropout( rate=self.motif_dropout_rate/4, **kwargs)
+
         self.motif_activity_fc2 = kl.Dense(
             self.motif_units_fc//4,
             activation=None,
-            kernel_initializer=self.inits['tf_activity_fc2_k'] if (self.load_init) else 'lecun_normal',
-            bias_initializer=self.inits['tf_activity_fc2_b'] if (self.load_init) else 'zeros',
+            kernel_initializer='lecun_normal',
+            bias_initializer='zeros',
             use_bias=True)
         
-
         self.pre_transformer_projection = kl.Dense(self.hidden_size,
                                                    activation=None,
-                                                    kernel_initializer=self.inits['pre_transformer_projection'] if (self.load_init) else 'lecun_normal',
+                                                    kernel_initializer='lecun_normal',
                                                     use_bias=False)
-
+        
         # Performer attention
         self.performer = Performer_Encoder(
             num_layers=self.num_transformer_layers,
@@ -218,8 +187,8 @@ class epibert(tf.keras.Model):
             kernel_transformation=self.kernel_transformation,
             normalize=self.normalize,
             seed = self.seed,
-            load_init=self.load_init,
-            inits=self.inits if self.load_init else None,
+            load_init=False,
+            inits=None,
             name = 'shared_transformer',
             **kwargs)
 
@@ -228,33 +197,16 @@ class epibert(tf.keras.Model):
                                              target_length=self.final_output_length,
                                              name='target_input')
 
-        if self.predict_atac:
-            self.final_pointwise_conv = conv_block(filters=self.filter_list_seq[-1] // self.final_point_scale,
-                                                    beta_init=self.inits['final_point_BN_b'] if self.load_init else None,
-                                                    gamma_init=self.inits['final_point_BN_g'] if self.load_init else None,
-                                                    mean_init=self.inits['final_point_BN_m'] if self.load_init else None,
-                                                    var_init=self.inits['final_point_BN_v'] if self.load_init else None,
-                                                    k_init=self.inits['final_point_k'] if self.load_init else None,
-                                                    b_init=self.inits['final_point_b'] if self.load_init else None,
-                                                    BN_momentum=self.BN_momentum,
-                                                    **kwargs,
-                                                    name = 'final_pointwise')
-            self.final_dense_profile = kl.Dense(1,
-                                                activation='softplus',
-                                                kernel_initializer=self.inits['final_dense_k'] if self.load_init else 'lecun_normal',
-                                                bias_initializer=self.inits['final_dense_b'] if self.load_init else 'zeros',
-                                                use_bias=True)
-        
-        self.final_pointwise_conv_rna = conv_block(filters=self.filter_list_seq[-1] // self.final_point_scale,
-                                            BN_momentum=self.BN_momentum,
-                                                **kwargs,
-                                                name = 'final_pointwise_rna')
-        self.final_dense_profile_rna = kl.Dense(1,
+        self.final_pointwise_conv = conv_block(filters=self.filter_list_seq[-1] // self.final_point_scale,
+                                               BN_momentum=self.BN_momentum,
+                                               **kwargs,
+                                               name = 'final_pointwise')
+
+        self.final_dense_profile = kl.Dense(1,
                                             activation='softplus',
                                             kernel_initializer='lecun_normal',
                                             bias_initializer='zeros',
                                             use_bias=True)
-
 
         self.dropout = kl.Dropout(rate=self.pointwise_dropout_rate,
                                   **kwargs)
@@ -267,40 +219,43 @@ class epibert(tf.keras.Model):
         Parameters
         ----------
         inputs : Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
-            ``(sequence, atac, motif_activity)``
+            ``(sequence, atac, motif_activity)`` where
+            * `sequence`        – one-hot encoded DNA of shape *(B, L, 4)*
+            * `atac`            – masked ATAC profile of shape *(B, L, 1)*
+            * `motif_activity`  – TF activity of shape *(B, n_motifs)*
+
         training : bool
-            Keras training mode flag.
+            Standard Keras training flag.
         """
 
+        # preprocess inputs ---------------------------------------------------
         seq_enc, atac_enc, motif_enc = self._encode_inputs(*inputs, training=training)
 
+        # concatenate channels and project to transformer dim -----------------
         x = tf.concat([seq_enc, atac_enc, motif_enc], axis=2)
         x = self.pre_transformer_projection(x)
-        x, att_matrices = self.performer(x, training=training)
 
-        out_rna = self.final_pointwise_conv_rna(x, training=training)
-        out_rna = self.dropout(out_rna, training=training)
-        out_rna = self.gelu(out_rna)
-        out_rna = self.final_dense_profile_rna(out_rna, training=training)
-        out_rna = self.crop_final(out_rna)
+        # Transformer encoder --------------------------------------------------
+        x, _ = self.performer(x, training=training)
 
-        out_atac = None
-        if self.predict_atac:
-            out_atac = self.final_pointwise_conv(x, training=training)
-            out_atac = self.dropout(out_atac, training=training)
-            out_atac = self.gelu(out_atac)
-            out_atac = self.final_dense_profile(out_atac, training=training)
-            out_atac = self.crop_final(out_atac)
-            return out_atac, out_rna, att_matrices
+        # Point-wise head ------------------------------------------------------
+        x = self.final_pointwise_conv(x, training=training)
+        x = self.dropout(x, training=training)
+        x = self.gelu(x)
+        x = self.final_dense_profile(x, training=training)
 
-        return out_rna
+        return self.crop_final(x)
+
+    # ---------------------------------------------------------------------
+    # helper functions
+    # ---------------------------------------------------------------------
 
     def _encode_inputs(self,
                        sequence: tf.Tensor,
                        atac: tf.Tensor,
                        motif_activity: tf.Tensor,
                        training: bool = True):
-        """Shared input encoding used by `call` and `predict_on_batch`."""
+        """Encode raw inputs into feature maps consumed by the Transformer."""
         # sequence branch
         seq_x = self.stem_conv(sequence, training=training)
         seq_x = self.stem_res_conv(seq_x, training=training)
@@ -338,8 +293,6 @@ class epibert(tf.keras.Model):
             "use_rot_emb": self.use_rot_emb,
             "normalize": self.normalize,
             "seed": self.seed,
-            "load_init": self.load_init,
-            "inits": self.inits,
             "filter_list_seq": self.filter_list_seq,
             "filter_list_atac": self.filter_list_atac,
             "BN_momentum": self.BN_momentum,
@@ -361,23 +314,34 @@ class epibert(tf.keras.Model):
 
     def predict_on_batch(self, inputs, training:bool=False):
 
-        seq_enc, atac_enc, motif_enc = self._encode_inputs(*inputs, training=training)
+        sequence,atac,motif_activity = inputs
 
-        x = tf.concat([seq_enc, atac_enc, motif_enc], axis=2)
-        x, att_matrices = self.performer(x, training=training)
+        # sequence input processing
+        sequence = self.stem_conv(sequence, training=training)
+        sequence = self.stem_res_conv(sequence, training=training)
+        sequence = self.stem_pool(sequence, training=training)
+        sequence = self.conv_tower(sequence, training=training)
 
-        out_rna = self.final_pointwise_conv_rna(x, training=training)
-        out_rna = self.dropout(out_rna, training=training)
-        out_rna = self.gelu(out_rna)
-        out_rna = self.final_dense_profile_rna(out_rna, training=training)
-        out_rna = self.crop_final(out_rna)
+        # atac input processsing
+        atac_x = self.stem_conv_atac(atac, training=training)
+        atac_x = self.stem_res_conv_atac(atac_x, training=training)
+        atac_x = self.stem_pool_atac(atac_x, training=training)
+        atac_x = self.conv_tower_atac(atac_x,training=training)
 
-        out_atac = None
-        if self.predict_atac:
-            out_atac = self.final_pointwise_conv(x, training=training)
-            out_atac = self.dropout(out_atac, training=training)
-            out_atac = self.gelu(out_atac)
-            out_atac = self.final_dense_profile(out_atac, training=training)
-            out_atac = self.crop_final(out_atac)
+        ### motif activity processing w/ MLP
+        motif_activity = self.motif_activity_fc1(motif_activity)
+        motif_activity = self.motif_dropout1(motif_activity,training=training)
+        motif_activity = self.motif_activity_fc2(motif_activity)
+        motif_activity = tf.tile(motif_activity, [1, self.output_length, 1])
 
-        return out_atac, out_rna, att_matrices
+        transformer_input = tf.concat([sequence,atac_x, motif_activity], axis=2) # append processed seq,atac,motif inputs in channel dim.
+        transformer_input = self.pre_transformer_projection(transformer_input)
+        out_performer,att_matrices = self.performer(transformer_input, training=training)
+
+
+        out = self.final_pointwise_conv(out_performer, training=training)
+        out = self.dropout(out, training=training)
+        out = self.gelu(out)
+        out = self.final_dense_profile(out, training=training)
+        out_profile = self.crop_final(out)
+        return out_profile, att_matrices

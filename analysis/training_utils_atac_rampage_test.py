@@ -893,12 +893,33 @@ def mask_ATAC_profile(output_length_ATAC, output_length, crop_size, mask_size,ou
     return full_comb_mask, full_comb_mask_store, full_comb_unmask_store
 
 
-with open('/home/javed/EpiBERT/src/motif_means_norm.tsv', 'r') as file:
+# Dynamic path resolution for project files
+import os
+from pathlib import Path
+
+def get_project_root():
+    """Find the EpiBERT project root directory."""
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / 'src').exists() and (parent / 'requirements.txt').exists():
+            return parent
+    # Fallback: assume we're in the project root if src/ exists relative to cwd
+    if Path('src').exists():
+        return Path.cwd()
+    raise FileNotFoundError("Could not find EpiBERT project root")
+
+PROJECT_ROOT = get_project_root()
+
+# Load motif normalization data with dynamic paths
+motif_means_path = PROJECT_ROOT / 'src' / 'motif_means_norm.tsv'
+motif_std_path = PROJECT_ROOT / 'src' / 'motif_std_norm.tsv'
+
+with open(motif_means_path, 'r') as file:
     lines = file.readlines()
 data = [list(map(float, line.strip().split(','))) for line in lines]
 motif_means = tf.cast(np.array(data),dtype=tf.float32)
 
-with open('/home/javed/EpiBERT/src/motif_std_norm.tsv', 'r') as file:
+with open(motif_std_path, 'r') as file:
     lines = file.readlines()
 data = [list(map(float, line.strip().split(','))) for line in lines]
 motif_std = tf.cast(np.array(data),dtype=tf.float32)

@@ -21,7 +21,9 @@ subprocess.call('''awk '$2 > 1' cluster_counts.txt | awk '{print $1}' > multiple
 
 clusters = []
 
-with open('multiple_clusters.txt', 'r') as file:
+# Use dynamic path resolution for input files
+clusters_file = os.path.join(os.getcwd(), 'multiple_clusters.txt')
+with open(clusters_file, 'r') as file:
     clusters = [line.strip() for line in file]
     
 multiple_out_file = open('multiples_collapsed.bed','a')

@@ -17,9 +17,9 @@ import tensorflow.experimental.numpy as tnp
 import tensorflow as tf
 import tensorflow_addons as tfa
 from tensorflow.keras import layers as kl
-#import src.layers.fast_attention as fa
-import src.layers.snnk_attention as snnk_attention
-import src.utils as utils
+#import epibert.layers.fast_attention as fa
+import epibert.layers.snnk_attention as snnk_attention
+import epibert.utils as utils
 from tensorflow.keras import regularizers
 from tensorflow.keras.layers.experimental import SyncBatchNormalization as syncbatchnorm
 

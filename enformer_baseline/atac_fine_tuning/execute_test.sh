@@ -4,7 +4,7 @@ python3 model_eval.py \
             --tpu_name="pod1" \
             --tpu_zone="europe-west4-a" \
             --wandb_project="enformer_rampage_atac_ft_test" \
-            --wandb_user="njaved" \
+            --wandb_user="${WANDB_USER:-default_user}" \
             --wandb_sweep_name="enformer_rampage_atac_ft_test" \
             --gcs_path="gs://genformer_europe_west_copy/enformer_atac/testing_all_cell_types/tfrecords" \
             --num_parallel=4 \

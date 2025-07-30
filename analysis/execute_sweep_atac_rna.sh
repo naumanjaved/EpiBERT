@@ -8,7 +8,7 @@ python3 train_model_atac_rampage_test.py \
             --tpu_name=$1 \
             --tpu_zone=$2 \
             --wandb_project="atac_rampage_paired_test" \
-            --wandb_user="njaved" \
+            --wandb_user="${WANDB_USER:-default_user}" \
             --wandb_sweep_name="atac_rampage_paired_test" \
             --gcs_project="picard-testing-176520" \
             --gcs_path="gs://$3/rampage_finetune/524k/paired_atac_rampage" \

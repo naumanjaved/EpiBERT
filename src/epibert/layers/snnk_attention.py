@@ -8,7 +8,7 @@ import tensorflow as tf
 from einops import rearrange, repeat
 from functools import partial
 #from util import *
-import src.layers.util as util
+import epibert.layers.util as util
 BIG_CONSTANT = 1e8
 
 

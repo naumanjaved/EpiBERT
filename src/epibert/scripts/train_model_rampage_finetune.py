@@ -10,11 +10,11 @@ from tensorflow.keras import mixed_precision
 os.environ['TF_ENABLE_EAGER_CLIENT_STREAMING_ENQUEUE']='False'
 
 ## custom modules
-import src.models.epibert_rampage_finetune as epibert # can toggle which model you want here
-import src.optimizers as optimizers
-import training_utils_rampage_finetune as training_utils
-import src.schedulers as schedulers
-from src.shared_training_utils import parse_bool_str
+from epibert.models import epibert_rampage_finetune as epibert # can toggle which model you want here
+from epibert import optimizers
+from epibert.scripts import training_utils_rampage_finetune as training_utils
+from epibert import schedulers
+from epibert.shared_training_utils import parse_bool_str
 
 # Main function definition
 def main():
@@ -175,7 +175,7 @@ def main():
         
         print('created dataset iterators')
         # initialize model
-        model = epibert.epibert(kernel_transformation=wandb.config.kernel_transformation,
+        model = epibert.epibert_rampage_finetune(kernel_transformation=wandb.config.kernel_transformation,
                                 dropout_rate=wandb.config.dropout_rate,
                                 pointwise_dropout_rate=wandb.config.pointwise_dropout_rate,
                                 input_length=wandb.config.input_length,

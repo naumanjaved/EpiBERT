@@ -4,7 +4,7 @@ export TPU_LOAD_LIBRARY=0
 export TPU_NAME=$1
 export ZONE=$2
 
-python3 train_model_rampage_finetune.py \
+python3 -m epibert.scripts.train_model_rampage_finetune \
             --tpu_name=$1 \
             --tpu_zone=$2 \
             --wandb_project=$3 \

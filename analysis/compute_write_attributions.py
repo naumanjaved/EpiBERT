@@ -39,7 +39,7 @@ import training_utils_atac as training_utils
 from scipy import stats
 import kipoiseq
 
-import analysis.scripts.interval_and_plotting_utilities as utils
+import analysis.interval_plotting_consolidated as utils
 
 SEQUENCE_LENGTH=524288
 

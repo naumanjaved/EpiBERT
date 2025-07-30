@@ -1,47 +1,96 @@
+"""
+EpiBERT RAMPAGE Fine-tuning Utilities
+====================================
+
+This module contains utilities for fine-tuning EpiBERT models on RAMPAGE data.
+RAMPAGE (RNA Annotation and Mapping of Promoters for Analysis of Gene Expression)
+data provides information about transcription start sites and gene expression.
+
+Key Features:
+- Multi-task learning (ATAC-seq + RAMPAGE prediction)
+- Dual optimizer support for different learning rates
+- Advanced data augmentation and preprocessing
+- Comprehensive metric tracking
+
+Key Functions:
+- return_train_val_functions: Create training/validation functions for multi-task learning
+- deserialize_tr/deserialize_val: RAMPAGE-specific data preprocessing
+- return_distributed_iterators: Setup distributed training iterators
+- parse_args: Command-line argument parsing
+
+Author: EpiBERT Team
+"""
+
 import os
 import multiprocessing
 import random
+from pathlib import Path
+from typing import Dict, List, Tuple, Any, Optional, Union
 import numpy as np
+import pandas as pd
+from scipy.stats import zscore
 
-os.environ['TF_ENABLE_EAGER_CLIENT_STREAMING_ENQUEUE']='False'
+# TensorFlow configuration
+os.environ['TF_ENABLE_EAGER_CLIENT_STREAMING_ENQUEUE'] = 'False'
 import tensorflow as tf
 from tensorflow import strings as tfs
-import src.metrics as metrics 
-import src.utils
-from src.losses import poisson_multinomial
-from scipy.stats import zscore as zscore
-import pandas as pd 
 
-# -----------------------------------------------------------------------------
-# Shared helpers (centralised to reduce duplication across utils modules)
-# -----------------------------------------------------------------------------
-from src.shared_training_utils import (
+# EpiBERT modules
+from epibert import metrics 
+from epibert import utils
+from epibert.losses import poisson_multinomial
+
+# Shared utilities (centralized to reduce duplication)
+from epibert.shared_training_utils import (
     tf_tpu_initialize as _tf_tpu_initialize,
     one_hot as _one_hot,
     log2 as _log2,
     early_stopping as _early_stopping,
 )
 
+# Re-export for backward compatibility
 tf_tpu_initialize = _tf_tpu_initialize  # type: ignore
 one_hot = _one_hot  # type: ignore
 log2 = _log2  # type: ignore
 early_stopping = _early_stopping  # type: ignore
 
+# Global TensorFlow configuration
 tf.keras.backend.set_floatx('float32')
 
-def return_train_val_functions(model, optimizers_in,
-                               strategy, metric_dict, num_replicas,
-                               loss_type,total_weight=0.15,atac_scale=0.10,predict_atac=False):
-    """Return training, validation, and build step functions
+# =============================================================================
+# MULTI-TASK TRAINING AND VALIDATION FUNCTIONS
+# =============================================================================
+
+def return_train_val_functions(model: tf.keras.Model,
+                               optimizers_in: Union[tf.keras.optimizers.Optimizer, 
+                                                   Tuple[tf.keras.optimizers.Optimizer, ...]],
+                               strategy: tf.distribute.Strategy,
+                               metric_dict: Dict[str, tf.keras.metrics.Metric],
+                               num_replicas: int,
+                               loss_type: str,
+                               total_weight: float = 0.15,
+                               atac_scale: float = 0.10,
+                               predict_atac: bool = False) -> Tuple[Any, Any, Any]:
+    """
+    Create training, validation, and build step functions for multi-task learning.
+    
+    This function sets up the training pipeline for RAMPAGE fine-tuning, which involves
+    multi-task learning with both ATAC-seq and RAMPAGE (gene expression) targets.
+    Supports dual optimizers for different learning rates on different tasks.
+    
     Args:
-        model: the input genformer model
-        optimizer: input optimizer, e.g. Adam
-        strategy: input distribution strategy
-        metric_dict: dictionary of metrics to track
-        num_replicas: num replicas for distributed training
-        gradient_clip: gradient clipping value
-        loss_type: poisson or poisson_multinomial
-        total_weight: total weight for the poisson_multinomial loss
+        model: EpiBERT model for RAMPAGE fine-tuning
+        optimizers_in: Single optimizer or tuple of optimizers for multi-task learning
+        strategy: Distribution strategy for multi-GPU/TPU training
+        metric_dict: Dictionary of metrics to track during training
+        num_replicas: Number of replicas for distributed training
+        loss_type: Loss function type ('poisson' or 'poisson_multinomial')
+        total_weight: Weight for poisson_multinomial loss (default: 0.15)
+        atac_scale: Scaling factor for ATAC-seq loss component (default: 0.10)
+        predict_atac: Whether to include ATAC-seq prediction task (default: False)
+        
+    Returns:
+        Tuple of (train_step, val_step, build_step) functions for multi-task training
     """
 
     # initialize metrics
@@ -240,6 +289,10 @@ def return_train_val_functions(model, optimizers_in,
         strategy.run(val_step, args=(next(iterator),))
 
     return dist_train_step,dist_val_step,dist_val_step_ho,build_step,metric_dict
+
+# =============================================================================
+# DATA PREPROCESSING AND DESERIALIZATION  
+# =============================================================================
 
 @tf.function
 def deserialize_tr(serialized_example, g, use_motif_activity,
@@ -594,6 +647,10 @@ def deserialize_val(serialized_example, g_val, use_motif_activity,
                 tf.cast(tf.ensure_shape(tss_tokens, [output_length-crop_size*2,1]),dtype=tf.float32), \
                             gene_token, cell_type
 
+# =============================================================================
+# DATASET CREATION AND DISTRIBUTED TRAINING SETUP
+# =============================================================================
+
 def return_dataset(gcs_path, split, batch, input_length, output_length_ATAC,
                    output_length, crop_size, output_res, max_shift, options,
                    num_parallel, num_epoch, atac_mask_dropout,
@@ -692,6 +749,10 @@ def return_distributed_iterators(gcs_path, gcs_path_ho, global_batch_size,
     tr_data_it = iter(tr_dist)
 
     return tr_data_it, val_data_it, val_data_ho_it
+
+# =============================================================================
+# VISUALIZATION AND ANALYSIS UTILITIES
+# =============================================================================
 
 def make_plots(y_trues,
                y_preds,
@@ -822,6 +883,10 @@ def mask_ATAC_profile(output_length_ATAC, output_length, crop_size, mask_size,ou
 # -----------------------------------------------------------------------------
 # Argument parser (restored).  No behavioural changes – identical flags.
 # -----------------------------------------------------------------------------
+
+# =============================================================================
+# COMMAND-LINE ARGUMENT PARSING
+# =============================================================================
 
 def parse_args(parser):
     """Populate *parser* with RAMPAGE fine-tuning command-line flags and

@@ -262,51 +262,65 @@ class epibert(tf.keras.Model):
 
 
     def call(self, inputs, training:bool=True):
-        
-        sequence,atac,motif_activity = inputs
+        """Forward pass.
 
-        # sequence input processing
-        sequence = self.stem_conv(sequence, training=training)
-        sequence = self.stem_res_conv(sequence, training=training)
-        sequence = self.stem_pool(sequence, training=training)
-        sequence = self.conv_tower(sequence, training=training)
+        Parameters
+        ----------
+        inputs : Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+            ``(sequence, atac, motif_activity)``
+        training : bool
+            Keras training mode flag.
+        """
 
-        # atac input processsing
+        seq_enc, atac_enc, motif_enc = self._encode_inputs(*inputs, training=training)
+
+        x = tf.concat([seq_enc, atac_enc, motif_enc], axis=2)
+        x = self.pre_transformer_projection(x)
+        x, att_matrices = self.performer(x, training=training)
+
+        out_rna = self.final_pointwise_conv_rna(x, training=training)
+        out_rna = self.dropout(out_rna, training=training)
+        out_rna = self.gelu(out_rna)
+        out_rna = self.final_dense_profile_rna(out_rna, training=training)
+        out_rna = self.crop_final(out_rna)
+
+        out_atac = None
+        if self.predict_atac:
+            out_atac = self.final_pointwise_conv(x, training=training)
+            out_atac = self.dropout(out_atac, training=training)
+            out_atac = self.gelu(out_atac)
+            out_atac = self.final_dense_profile(out_atac, training=training)
+            out_atac = self.crop_final(out_atac)
+            return out_atac, out_rna, att_matrices
+
+        return out_rna
+
+    def _encode_inputs(self,
+                       sequence: tf.Tensor,
+                       atac: tf.Tensor,
+                       motif_activity: tf.Tensor,
+                       training: bool = True):
+        """Shared input encoding used by `call` and `predict_on_batch`."""
+        # sequence branch
+        seq_x = self.stem_conv(sequence, training=training)
+        seq_x = self.stem_res_conv(seq_x, training=training)
+        seq_x = self.stem_pool(seq_x, training=training)
+        seq_x = self.conv_tower(seq_x, training=training)
+
+        # atac branch
         atac_x = self.stem_conv_atac(atac, training=training)
         atac_x = self.stem_res_conv_atac(atac_x, training=training)
         atac_x = self.stem_pool_atac(atac_x, training=training)
-        atac_x = self.conv_tower_atac(atac_x,training=training)
+        atac_x = self.conv_tower_atac(atac_x, training=training)
 
-        ### motif activity processing w/ MLP
-        motif_activity = self.motif_activity_fc1(motif_activity)
-        motif_activity = self.motif_dropout1(motif_activity,training=training)
-        motif_activity = self.motif_activity_fc2(motif_activity)
-        motif_activity = self.motif_dropout2(motif_activity,training=training)
-        motif_activity = tf.tile(motif_activity, [1, self.output_length, 1])
+        # motif branch
+        motif_x = self.motif_activity_fc1(motif_activity)
+        motif_x = self.motif_dropout1(motif_x, training=training)
+        motif_x = self.motif_activity_fc2(motif_x)
+        motif_x = self.motif_dropout2(motif_x, training=training)
+        motif_x = tf.tile(motif_x, [1, self.output_length, 1])
 
-        transformer_input = tf.concat([sequence,atac_x, motif_activity],
-                                      axis=2) # append processed seq,atac,motif inputs in channel dim.
-        transformer_input = self.pre_transformer_projection(transformer_input)
-        out_performer,att_matrices = self.performer(transformer_input, training=training)
-
-        if self.predict_atac:
-            out_atac = self.final_pointwise_conv(out_performer, training=training) ##
-            out_atac = self.dropout(out_atac, training=training) 
-            out_atac = self.gelu(out_atac)
-            out_atac = self.final_dense_profile(out_atac, training=training)
-            out_atac = self.crop_final(out_atac) 
-
-
-        out_rna = self.final_pointwise_conv_rna(out_performer, training=training)
-        out_rna = self.dropout(out_rna, training=training) 
-        out_rna = self.gelu(out_rna)
-        out_rna = self.final_dense_profile_rna(out_rna, training=training)
-        out_rna = self.crop_final(out_rna) 
-
-        if self.predict_atac:
-            return out_atac,out_rna
-        else:
-            return out_rna
+        return seq_x, atac_x, motif_x
 
     def get_config(self):
         config = {
@@ -347,41 +361,23 @@ class epibert(tf.keras.Model):
 
     def predict_on_batch(self, inputs, training:bool=False):
 
-        sequence,atac,motif_activity = inputs
+        seq_enc, atac_enc, motif_enc = self._encode_inputs(*inputs, training=training)
 
-        # sequence input processing
-        sequence = self.stem_conv(sequence, training=training)
-        sequence = self.stem_res_conv(sequence, training=training)
-        sequence = self.stem_pool(sequence, training=training)
-        sequence = self.conv_tower(sequence, training=training)
+        x = tf.concat([seq_enc, atac_enc, motif_enc], axis=2)
+        x, att_matrices = self.performer(x, training=training)
 
-        # atac input processsing
-        atac_x = self.stem_conv_atac(atac, training=training)
-        atac_x = self.stem_res_conv_atac(atac_x, training=training)
-        atac_x = self.stem_pool_atac(atac_x, training=training)
-        atac_x = self.conv_tower_atac(atac_x,training=training)
-
-        ### motif activity processing w/ MLP
-        motif_activity = self.motif_activity_fc1(motif_activity)
-        motif_activity = self.motif_dropout1(motif_activity,training=training)
-        motif_activity = self.motif_activity_fc2(motif_activity)
-        motif_activity = self.motif_dropout2(motif_activity,training=training)
-        motif_activity = tf.tile(motif_activity, [1, self.output_length, 1])
-
-        transformer_input = tf.concat([sequence,atac_x, motif_activity],
-                                                                    axis=2) # append processed seq,atac,motif inputs in channel dim.
-        out_performer,att_matrices = self.performer(transformer_input, training=training)
-
-        out_atac = self.final_pointwise_conv_atac(out_performer, training=training) ##
-        out_atac = self.dropout(out_atac, training=training)
-        out_atac = self.gelu(out_atac)
-        out_atac = self.final_dense_profile(out_atac, training=training)
-        out_atac = self.crop_final(out_atac) 
-
-        out_rna = self.final_pointwise_conv_rna(out_performer, training=training) ##
-        out_rna = self.dropout(out_rna, training=training) 
+        out_rna = self.final_pointwise_conv_rna(x, training=training)
+        out_rna = self.dropout(out_rna, training=training)
         out_rna = self.gelu(out_rna)
         out_rna = self.final_dense_profile_rna(out_rna, training=training)
-        out_rna = self.crop_final(out_rna) 
+        out_rna = self.crop_final(out_rna)
 
-        return out_atac,out_rna, att_matrices
+        out_atac = None
+        if self.predict_atac:
+            out_atac = self.final_pointwise_conv(x, training=training)
+            out_atac = self.dropout(out_atac, training=training)
+            out_atac = self.gelu(out_atac)
+            out_atac = self.final_dense_profile(out_atac, training=training)
+            out_atac = self.crop_final(out_atac)
+
+        return out_atac, out_rna, att_matrices

@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""Common building blocks (convolutions, FFN, Performer encoder, etc.) used by
+EpiBERT models.
+
+Only documentation and unused-import clean-ups were added—layer names, class
+names, and call signatures are preserved so existing checkpoints remain
+compatible.
+"""
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -65,8 +74,8 @@ def conv_block(
     Parameters:
     - filters: Number of filters for the Conv1D layer.
     - width: Kernel size for the Conv1D layer.
-    - kernel_init: Initializer for the kernel weights.
-    - bias_init: Initializer for the bias.
+    - k_init: Initializer for the kernel weights.
+    - b_init: Initializer for the bias.
     - padding: Padding type for the Conv1D layer.
     - name: Name for the sequential model.
     - dilation_rate: Dilation rate for the Conv1D layer.
@@ -103,6 +112,11 @@ def conv_block(
 
 @tf.keras.utils.register_keras_serializable()
 class pt_init(tf.keras.initializers.Initializer):
+    """Pass-through initializer that returns a pre-computed numpy array/TF tensor.
+
+    Useful for loading weights from NumPy before building a model in eager
+    mode without registering a custom initializer separately.
+    """
     def __init__(self, input_arr):
         self.input_arr = input_arr
 
@@ -112,13 +126,10 @@ class pt_init(tf.keras.initializers.Initializer):
 @tf.keras.utils.register_keras_serializable()
 class Residual(kl.Layer):
     def __init__(self,
-                 layer :  kl.Layer,
-                 name : str = 'residual',
+                 layer: kl.Layer,
+                 name: str = 'residual',
                  **kwargs):
-        """Simple Residual block
-        Args:
-          name: Module name.
-        """
+        """Wrap *layer* with a residual skip connection (X + f(X))."""
         super().__init__(**kwargs,name=name)
         self._layer=layer
 

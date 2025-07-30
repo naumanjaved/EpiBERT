@@ -12,6 +12,20 @@ from src.losses import poisson_multinomial
 from scipy.stats import zscore as zscore
 import pandas as pd 
 
+# -----------------------------------------------------------------------------
+# Shared helpers (centralised to reduce duplication across utils modules)
+# -----------------------------------------------------------------------------
+from src.shared_training_utils import (
+    tf_tpu_initialize as _tf_tpu_initialize,
+    one_hot as _one_hot,
+    log2 as _log2,
+    early_stopping as _early_stopping,
+)
+
+tf_tpu_initialize = _tf_tpu_initialize  # type: ignore
+one_hot = _one_hot  # type: ignore
+log2 = _log2  # type: ignore
+early_stopping = _early_stopping  # type: ignore
 
 tf.keras.backend.set_floatx('float32')
 
@@ -679,173 +693,6 @@ def return_distributed_iterators(gcs_path, gcs_path_ho, global_batch_size,
 
     return tr_data_it, val_data_it, val_data_ho_it
 
-def early_stopping(current_val_loss,
-                   logged_val_losses,
-                   best_epoch,
-                   patience,
-                   patience_counter,
-                   min_delta,):
-    """early stopping function
-    Args:
-        current_val_loss: current epoch val loss
-        logged_val_losses: previous epochs val losses
-        current_epoch: current epoch number
-        save_freq: frequency(in epochs) with which to save checkpoints
-        patience: # of epochs to continue w/ stable/increasing val loss
-                  before terminating training loop
-        patience_counter: # of epochs over which val loss hasn't decreased
-        min_delta: minimum decrease in val loss required to reset patience
-                   counter
-        model: model object
-        save_directory: cloud bucket location to save model
-        model_parameters: log file of all model parameters
-        saved_model_basename: prefix for saved model dir
-    Returns:
-        stop_criteria: bool indicating whether to exit train loop
-        patience_counter: # of epochs over which val loss hasn't decreased
-        best_epoch: best epoch so far
-    """
-    print('check whether early stopping/save criteria met')
-    try:
-        best_loss = min(logged_val_losses[:-1])
-
-    except ValueError:
-        best_loss = current_val_loss
-
-    stop_criteria = False
-    ## if min delta satisfied then log loss
-
-    if (current_val_loss >= (best_loss - min_delta)):# and (current_pearsons <= best_pearsons):
-        patience_counter += 1
-        if patience_counter >= patience:
-            stop_criteria=True
-    else:
-        best_epoch = np.argmin(logged_val_losses)
-        ## save current model
-
-        patience_counter = 0
-        stop_criteria = False
-
-    return stop_criteria, patience_counter, best_epoch
-
-def parse_args(parser):
-    # Loads in command line arguments for execute_sweep.sh
-    parser.add_argument('--tpu_name', help='name of TPU pod')
-    parser.add_argument('--tpu_zone', help='zone of TPU pod')
-    parser.add_argument('--wandb_project', help='name of wandb project to write to')
-    parser.add_argument('--wandb_user', help='wandb username')
-    parser.add_argument('--wandb_sweep_name', help='wandb_sweep_name')
-    parser.add_argument('--gcs_project', help='gcs_project')
-    parser.add_argument('--gcs_path', help='google bucket containing preprocessed data')
-    parser.add_argument('--gcs_path_holdout', help='google bucket containing holdout data')
-    parser.add_argument('--num_parallel', type=int, default=multiprocessing.cpu_count(), help='thread count for tensorflow record loading')
-    parser.add_argument('--batch_size', default=1, type=int, help='batch_size')
-    parser.add_argument('--val_examples', type=int, help='val_examples')
-    parser.add_argument('--val_examples_ho', type=int, help='val_examples_ho')
-    parser.add_argument('--patience', type=int, help='patience for early stopping')
-    parser.add_argument('--min_delta', type=float, help='min_delta for early stopping')
-    parser.add_argument('--model_save_dir', type=str)
-    parser.add_argument('--model_save_basename', type=str)
-    parser.add_argument('--max_shift', default=10, type=int)
-    parser.add_argument('--output_res', default=128, type=int)
-    parser.add_argument('--decay_steps', default=88*34021*16, type=int)
-    parser.add_argument('--lr_base1', default="1.0e-03", help='lr_base1')
-    parser.add_argument('--lr_base2', default="1.0e-03", help='lr_base2')
-    parser.add_argument('--decay_frac', type=str, help='decay_frac')
-    parser.add_argument('--input_length', type=int, default=196608, help='input_length')
-    parser.add_argument('--output_length', type=int, default=1536, help='output_length')
-    parser.add_argument('--output_length_ATAC', type=int, default=1536, help='output_length_ATAC')
-    parser.add_argument('--final_output_length', type=int, default=896, help='final_output_length')
-    parser.add_argument('--num_transformer_layers', type=str, default="6", help='num_transformer_layers')
-    parser.add_argument('--filter_list_seq', default="768,896,1024,1152,1280,1536", help='filter_list_seq')
-    parser.add_argument('--filter_list_atac', default="32,64", help='filter_list_atac')
-    parser.add_argument('--epsilon', default=1.0e-16, type=float, help='epsilon')
-    parser.add_argument('--gradient_clip', type=str, default="1.0", help='gradient_clip')
-    parser.add_argument('--dropout_rate', default="0.40", help='dropout_rate')
-    parser.add_argument('--pointwise_dropout_rate', default="0.05", help='pointwise_dropout_rate')
-    parser.add_argument('--num_heads', default="8", help='num_heads')
-    parser.add_argument('--BN_momentum', type=float, default=0.80, help='BN_momentum')
-    parser.add_argument('--kernel_transformation', type=str, default="relu_kernel_transformation", help='kernel_transformation')
-    parser.add_argument('--savefreq', type=int, help='savefreq')
-    parser.add_argument('--checkpoint_path', type=str, default=None, help='checkpoint_path')
-    parser.add_argument('--checkpoint_path_FT', type=str, default=None, help='checkpoint_path_FT')
-    parser.add_argument('--load_init', type=str, default="False", help='load_init')
-    parser.add_argument('--load_init_FT', type=str, default="False", help='load_init_FT')
-    parser.add_argument('--normalize', type=str, default="True", help='normalize')
-    parser.add_argument('--norm', type=str, default="True", help='norm')
-    parser.add_argument('--atac_mask_dropout', type=float, default=0.05, help='atac_mask_dropout')
-    parser.add_argument('--atac_mask_dropout_val', type=float, default=0.05, help='atac_mask_dropout_val')
-    parser.add_argument('--final_point_scale', type=str, default="6", help='final_point_scale')
-    parser.add_argument('--rectify', type=str, default="True", help='rectify')
-    parser.add_argument('--optimizer', type=str, default="adam", help='optimizer')
-    parser.add_argument('--log_atac', type=str, default="True", help='log_atac')
-    parser.add_argument('--use_atac', type=str, default="True", help='use_atac')
-    parser.add_argument('--use_seq', type=str, default="True", help='use_seq')
-    parser.add_argument('--random_mask_size', type=str, default="1152", help='random_mask_size')
-    parser.add_argument('--seed', type=int, default=42, help= 'seed')
-    parser.add_argument('--val_data_seed', type=int, default=25, help= 'val_data_seed')
-    parser.add_argument('--atac_corrupt_rate', type=str,default="20",
-                        help= 'increase atac corrupt by 3x with 1.0/atac_corrupt_rate probability')
-    parser.add_argument('--use_motif_activity', type=str, default="False", help= 'use_motif_activity')
-    parser.add_argument('--loss_type', type=str, default="poisson_multinomial", help= 'loss_type')
-    parser.add_argument('--total_weight_loss',type=str, default="0.15", help= 'total_weight_loss')
-    parser.add_argument('--use_rot_emb',type=str, default="True", help= 'use_rot_emb')
-    parser.add_argument('--run_id', type=str, default=None)
-    parser.add_argument('--warmup_steps', type=int, default=5000)
-    parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--reset_optimizer_state',type=str, default="False", help= 'reset_optimizer_state')
-    parser.add_argument('--return_constant_lr',type=str, default="False", help= 'return_constant_lr')
-    parser.add_argument('--unmask_loss',type=str, default="False", help= 'return_constant_lr')
-    parser.add_argument('--atac_scale', type=str, default="True", help= 'atac_scale for loss')
-    parser.add_argument('--predict_atac', type=str, default="True", help= 'predict_atac')
-    args = parser.parse_args()
-    return parser
-
-def one_hot(sequence):
-    '''
-    convert input string tensor to one hot encoded
-    will replace all N character with 0 0 0 0
-    '''
-    vocabulary = tf.constant(['A', 'C', 'G', 'T'])
-    mapping = tf.constant([0, 1, 2, 3])
-
-    init = tf.lookup.KeyValueTensorInitializer(keys=vocabulary,
-                                               values=mapping)
-    table = tf.lookup.StaticHashTable(init, default_value=4)
-
-    input_characters = tfs.upper(tfs.unicode_split(sequence, 'UTF-8'))
-
-    out = tf.one_hot(table.lookup(input_characters),
-                      depth = 5,
-                      dtype=tf.float32)[:, :4]
-    return out
-
-
-def log2(x):
-    numerator = tf.math.log(x)
-    denominator = tf.math.log(tf.constant(2, dtype=numerator.dtype))
-    return numerator / denominator
-
-def tf_tpu_initialize(tpu_name,zone):
-    """Initialize TPU and return global batch size for loss calculation
-    Args:
-        tpu_name
-    Returns:
-        distributed strategy
-    """
-
-    try:
-        cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
-            tpu=tpu_name,zone=zone)
-        tf.config.experimental_connect_to_cluster(cluster_resolver)
-        tf.tpu.experimental.initialize_tpu_system(cluster_resolver)
-        strategy = tf.distribute.TPUStrategy(cluster_resolver)
-
-    except ValueError: # no TPU found, detect GPUs
-        strategy = tf.distribute.get_strategy()
-
-    return strategy
-
 def make_plots(y_trues,
                y_preds,
                cell_types,
@@ -971,4 +818,83 @@ def mask_ATAC_profile(output_length_ATAC, output_length, crop_size, mask_size,ou
     full_comb_unmask_store = tf.tensor_scatter_nd_update(full_comb_unmask_store, selected_indices, updates) # Since selected_indices is a 2D tensor with shape [num_ones, tensor_rank], we need to update using scatter_nd
 
     return full_comb_mask, full_comb_mask_store, full_comb_unmask_store
+
+# -----------------------------------------------------------------------------
+# Argument parser (restored).  No behavioural changes – identical flags.
+# -----------------------------------------------------------------------------
+
+def parse_args(parser):
+    """Populate *parser* with RAMPAGE fine-tuning command-line flags and
+    return it.  Kept verbatim from the original implementation so external
+    scripts remain compatible."""
+
+    parser.add_argument('--tpu_name', help='name of TPU pod')
+    parser.add_argument('--tpu_zone', help='zone of TPU pod')
+    parser.add_argument('--wandb_project', help='name of wandb project to write to')
+    parser.add_argument('--wandb_user', help='wandb username')
+    parser.add_argument('--wandb_sweep_name', help='wandb_sweep_name')
+    parser.add_argument('--gcs_project', help='gcs_project')
+    parser.add_argument('--gcs_path', help='google bucket containing preprocessed data')
+    parser.add_argument('--gcs_path_holdout', help='google bucket containing holdout data')
+    parser.add_argument('--num_parallel', type=int, default=multiprocessing.cpu_count(), help='thread count for TFRecord loading')
+    parser.add_argument('--batch_size', default=1, type=int, help='batch_size')
+    parser.add_argument('--val_examples', type=int, help='val_examples')
+    parser.add_argument('--val_examples_ho', type=int, help='val_examples_ho')
+    parser.add_argument('--patience', type=int, help='patience for early stopping')
+    parser.add_argument('--min_delta', type=float, help='min_delta for early stopping')
+    parser.add_argument('--model_save_dir', type=str)
+    parser.add_argument('--model_save_basename', type=str)
+    parser.add_argument('--max_shift', default=10, type=int)
+    parser.add_argument('--output_res', default=128, type=int)
+    parser.add_argument('--decay_steps', default=88*34021*16, type=int)
+    parser.add_argument('--lr_base1', default='1.0e-03', help='lr_base1')
+    parser.add_argument('--lr_base2', default='1.0e-03', help='lr_base2')
+    parser.add_argument('--decay_frac', type=str, help='decay_frac')
+    parser.add_argument('--input_length', type=int, default=196608, help='input_length')
+    parser.add_argument('--output_length', type=int, default=1536, help='output_length')
+    parser.add_argument('--output_length_ATAC', type=int, default=1536, help='output_length_ATAC')
+    parser.add_argument('--final_output_length', type=int, default=896, help='final_output_length')
+    parser.add_argument('--num_transformer_layers', type=str, default='6', help='num_transformer_layers')
+    parser.add_argument('--filter_list_seq', default='768,896,1024,1152,1280,1536', help='filter_list_seq')
+    parser.add_argument('--filter_list_atac', default='32,64', help='filter_list_atac')
+    parser.add_argument('--epsilon', default=1.0e-16, type=float, help='epsilon')
+    parser.add_argument('--gradient_clip', type=str, default='1.0', help='gradient_clip')
+    parser.add_argument('--dropout_rate', default='0.40', help='dropout_rate')
+    parser.add_argument('--pointwise_dropout_rate', default='0.05', help='pointwise_dropout_rate')
+    parser.add_argument('--num_heads', default='8', help='num_heads')
+    parser.add_argument('--BN_momentum', type=float, default=0.80, help='BN_momentum')
+    parser.add_argument('--kernel_transformation', type=str, default='relu_kernel_transformation', help='kernel_transformation')
+    parser.add_argument('--savefreq', type=int, help='savefreq')
+    parser.add_argument('--checkpoint_path', type=str, default=None, help='checkpoint_path')
+    parser.add_argument('--checkpoint_path_FT', type=str, default=None, help='checkpoint_path_FT')
+    parser.add_argument('--load_init', type=str, default='False', help='load_init')
+    parser.add_argument('--load_init_FT', type=str, default='False', help='load_init_FT')
+    parser.add_argument('--normalize', type=str, default='True', help='normalize')
+    parser.add_argument('--norm', type=str, default='True', help='norm')
+    parser.add_argument('--atac_mask_dropout', type=float, default=0.05, help='atac_mask_dropout')
+    parser.add_argument('--atac_mask_dropout_val', type=float, default=0.05, help='atac_mask_dropout_val')
+    parser.add_argument('--final_point_scale', type=str, default='6', help='final_point_scale')
+    parser.add_argument('--rectify', type=str, default='True', help='rectify')
+    parser.add_argument('--optimizer', type=str, default='adam', help='optimizer')
+    parser.add_argument('--log_atac', type=str, default='True', help='log_atac')
+    parser.add_argument('--use_atac', type=str, default='True', help='use_atac')
+    parser.add_argument('--use_seq', type=str, default='True', help='use_seq')
+    parser.add_argument('--random_mask_size', type=str, default='1152', help='random_mask_size')
+    parser.add_argument('--seed', type=int, default=42, help='seed')
+    parser.add_argument('--val_data_seed', type=int, default=25, help='val_data_seed')
+    parser.add_argument('--atac_corrupt_rate', type=str, default='20', help='increase atac corrupt by 3× with 1/atac_corrupt_rate probability')
+    parser.add_argument('--use_motif_activity', type=str, default='False', help='use_motif_activity')
+    parser.add_argument('--loss_type', type=str, default='poisson_multinomial', help='loss_type')
+    parser.add_argument('--total_weight_loss', type=str, default='0.15', help='total_weight_loss')
+    parser.add_argument('--use_rot_emb', type=str, default='True', help='use_rot_emb')
+    parser.add_argument('--run_id', type=str, default=None)
+    parser.add_argument('--warmup_steps', type=int, default=5000)
+    parser.add_argument('--num_epochs', type=int, default=100)
+    parser.add_argument('--reset_optimizer_state', type=str, default='False', help='reset_optimizer_state')
+    parser.add_argument('--return_constant_lr', type=str, default='False', help='return_constant_lr')
+    parser.add_argument('--unmask_loss', type=str, default='False', help='unmask_loss')
+    parser.add_argument('--atac_scale', type=str, default='True', help='atac_scale for loss')
+    parser.add_argument('--predict_atac', type=str, default='True', help='predict_atac')
+
+    return parser
 

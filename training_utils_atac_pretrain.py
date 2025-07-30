@@ -9,7 +9,23 @@ from tensorflow import strings as tfs
 import src.metrics as metrics 
 import src.utils
 from src.losses import poisson_multinomial
+from src.shared_dataset_utils import build_tfrecord_dataset
 
+# -----------------------------------------------------------------------------
+# Shared helpers (de-duplicated from both training utility modules)
+# -----------------------------------------------------------------------------
+from src.shared_training_utils import (
+    tf_tpu_initialize as _tf_tpu_initialize,
+    one_hot as _one_hot,
+    log2 as _log2,
+    early_stopping as _early_stopping,
+)
+
+# Re-export under original names so downstream code remains unchanged
+tf_tpu_initialize = _tf_tpu_initialize  # type: ignore
+one_hot = _one_hot  # type: ignore
+log2 = _log2  # type: ignore
+early_stopping = _early_stopping  # type: ignore
 
 tf.keras.backend.set_floatx('float32')
 
@@ -438,50 +454,69 @@ def return_dataset(gcs_path, split, batch, input_length, output_length_ATAC,
     """
     wc = "*.tfr"
 
-    if split == 'train':
-        list_files = tf.io.gfile.glob(os.path.join(gcs_path, split, wc))
-        random.Random(seed).shuffle(list_files)
-        # Divide list_files into smaller subsets
-        #subset_size = 16
-        #files_subsets = [list_files[i:i + subset_size] for i in range(0, len(list_files), subset_size)]
-        #iterators_list = []
-        #for files in files_subsets:
-        dataset = tf.data.Dataset.list_files(list_files,seed=seed)
-        dataset = tf.data.TFRecordDataset(dataset, compression_type='ZLIB', num_parallel_reads=tf.data.AUTOTUNE)
-        dataset = dataset.with_options(options)
+    if split == "train":
+        deserialize = lambda rec: deserialize_tr(
+            rec,
+            g,
+            use_motif_activity,
+            input_length,
+            max_shift,
+            output_length_ATAC,
+            output_length,
+            crop_size,
+            output_res,
+            atac_mask_dropout,
+            random_mask_size,
+            log_atac,
+            use_atac,
+            use_seq,
+            atac_corrupt_rate,
+            mask_noise,
+        )
 
-        dataset = dataset.map(
-            lambda record: deserialize_tr(
-                record,
-                g, use_motif_activity,
-                input_length, max_shift,
-                output_length_ATAC, output_length,
-                crop_size, output_res,
-                atac_mask_dropout, random_mask_size,
-                log_atac, use_atac, use_seq,
-                atac_corrupt_rate,mask_noise),
+        return build_tfrecord_dataset(
+            gcs_path,
+            split,
+            wc,
+            deserialize,
+            batch=batch,
+            options=options,
             deterministic=False,
-            num_parallel_calls=tf.data.AUTOTUNE)
+            repeat=2,
+        )
 
-        return dataset.repeat(2).batch(batch).prefetch(tf.data.AUTOTUNE)
+    # validation / test
+    deserialize = lambda rec: deserialize_val(
+        rec,
+        g,
+        use_motif_activity,
+        input_length,
+        max_shift,
+        output_length_ATAC,
+        output_length,
+        crop_size,
+        output_res,
+        atac_mask_dropout,
+        random_mask_size,
+        log_atac,
+        use_atac,
+        use_seq,
+        mask_noise,
+    )
 
-    else:
-        list_files = (tf.io.gfile.glob(os.path.join(gcs_path, split, wc)))
-        files = tf.data.Dataset.list_files(list_files,shuffle=False)
-        dataset = tf.data.TFRecordDataset(files, compression_type='ZLIB', num_parallel_reads=tf.data.AUTOTUNE)
-        dataset = dataset.with_options(options)
-        dataset = dataset.map(
-            lambda record: deserialize_val(
-                record, g, use_motif_activity,
-                input_length, max_shift,
-                output_length_ATAC, output_length,
-                crop_size, output_res,
-                atac_mask_dropout, random_mask_size,
-                log_atac, use_atac, use_seq,mask_noise),
-            deterministic=False,
-            num_parallel_calls=tf.data.AUTOTUNE)
+    take_elems = batch * validation_steps if validation_steps is not None else None
 
-        return dataset.take(batch*validation_steps).batch(batch).repeat((num_epoch)).prefetch(tf.data.AUTOTUNE)
+    return build_tfrecord_dataset(
+        gcs_path,
+        split,
+        wc,
+        deserialize,
+        batch=batch,
+        options=options,
+        deterministic=False,
+        repeat=num_epoch,
+        take=take_elems,
+    )
 
 def return_distributed_iterators(gcs_path, gcs_path_ho, global_batch_size,
                                  input_length, max_shift, output_length_ATAC,
@@ -518,55 +553,6 @@ def return_distributed_iterators(gcs_path, gcs_path_ho, global_batch_size,
     #    dist_iters_list.append(tr_data_it)
 
     return tr_data_it, val_data_ho_it
-
-def early_stopping(current_val_loss,
-                   logged_val_losses,
-                   best_epoch,
-                   patience,
-                   patience_counter,
-                   min_delta,):
-    """early stopping function
-    Args:
-        current_val_loss: current epoch val loss
-        logged_val_losses: previous epochs val losses
-        current_epoch: current epoch number
-        save_freq: frequency(in epochs) with which to save checkpoints
-        patience: # of epochs to continue w/ stable/increasing val loss
-                  before terminating training loop
-        patience_counter: # of epochs over which val loss hasn't decreased
-        min_delta: minimum decrease in val loss required to reset patience
-                   counter
-        model: model object
-        save_directory: cloud bucket location to save model
-        model_parameters: log file of all model parameters
-        saved_model_basename: prefix for saved model dir
-    Returns:
-        stop_criteria: bool indicating whether to exit train loop
-        patience_counter: # of epochs over which val loss hasn't decreased
-        best_epoch: best epoch so far
-    """
-    print('check whether early stopping/save criteria met')
-    try:
-        best_loss = min(logged_val_losses[:-1])
-
-    except ValueError:
-        best_loss = current_val_loss
-
-    stop_criteria = False
-    ## if min delta satisfied then log loss
-
-    if (current_val_loss >= (best_loss - min_delta)):# and (current_pearsons <= best_pearsons):
-        patience_counter += 1
-        if patience_counter >= patience:
-            stop_criteria=True
-    else:
-        best_epoch = np.argmin(logged_val_losses)
-        ## save current model
-
-        patience_counter = 0
-        stop_criteria = False
-
-    return stop_criteria, patience_counter, best_epoch
 
 def parse_args(parser):
     # Loads in command line arguments for execute_sweep.sh
@@ -637,119 +623,6 @@ def parse_args(parser):
     parser.add_argument('--mask_noise',type=str,default="False",help='mask_noise')
     args = parser.parse_args()
     return parser
-
-def one_hot(sequence):
-    '''
-    convert input string tensor to one hot encoded
-    will replace all N character with 0 0 0 0
-    '''
-    vocabulary = tf.constant(['A', 'C', 'G', 'T'])
-    mapping = tf.constant([0, 1, 2, 3])
-
-    init = tf.lookup.KeyValueTensorInitializer(keys=vocabulary,
-                                               values=mapping)
-    table = tf.lookup.StaticHashTable(init, default_value=4)
-
-    input_characters = tfs.upper(tfs.unicode_split(sequence, 'UTF-8'))
-
-    out = tf.one_hot(table.lookup(input_characters),
-                      depth = 5,
-                      dtype=tf.float32)[:, :4]
-    return out
-
-
-def log2(x):
-    numerator = tf.math.log(x)
-    denominator = tf.math.log(tf.constant(2, dtype=numerator.dtype))
-    return numerator / denominator
-
-def tf_tpu_initialize(tpu_name,zone):
-    """Initialize TPU and return global batch size for loss calculation
-    Args:
-        tpu_name
-    Returns:
-        distributed strategy
-    """
-
-    try:
-        cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
-            tpu=tpu_name,zone=zone)
-        tf.config.experimental_connect_to_cluster(cluster_resolver)
-        tf.tpu.experimental.initialize_tpu_system(cluster_resolver)
-        strategy = tf.distribute.TPUStrategy(cluster_resolver)
-
-    except ValueError: # no TPU found, detect GPUs
-        strategy = tf.distribute.get_strategy()
-
-    return strategy
-'''
-def make_plots(y_trues,
-               y_preds,
-               num_points):
-
-    results_df = pd.DataFrame()
-    results_df['true'] = y_trues
-    results_df['pred'] = y_preds
-
-    results_df['true_log'] = np.log2(1.0+results_df['true'])
-    results_df['pred_log'] = np.log2(1.0+results_df['pred'])
-
-    true=results_df[['true']].to_numpy()[:,0]
-    pred=results_df[['pred']].to_numpy()[:,0]
-    true_log=results_df[['true_log']].to_numpy()[:,0]
-    pred_log=results_df[['pred_log']].to_numpy()[:,0]
-
-    try:
-        overall_corr=results_df['true'].corr(results_df['pred'])
-        overall_corr_log=results_df['true_log'].corr(results_df['pred_log'])
-    except np.linalg.LinAlgError as err:
-        overall_corr = 0.0
-        overall_corr_log = 0.0
-
-    fig_overall,ax_overall=plt.subplots(figsize=(6,6))
-    ## scatter plot for 50k points max
-    idx = np.random.choice(np.arange(len(true)), num_points, replace=False)
-
-    data = np.vstack([true[idx], pred[idx]])
-
-    min_true = min(true)
-    max_true = max(true)
-    min_pred = min(pred)
-    max_pred = max(pred)
-
-    try:
-        kernel = stats.gaussian_kde(data)(data)
-        sns.scatterplot(
-            x=true_log[idx],
-            y=pred_log[idx],
-            c=kernel,
-            cmap="viridis")
-        ax_overall.set_xlim(min_true,max_true)
-        ax_overall.set_ylim(min_pred,max_pred)
-        plt.xlabel("log-true")
-        plt.ylabel("log-pred")
-        plt.title("overall atac corr")
-    except np.linalg.LinAlgError as err:
-        sns.scatterplot(
-            x=true_log[idx],
-            y=pred_log[idx],
-            cmap="viridis")
-        ax_overall.set_xlim(min_true,max_true)
-        ax_overall.set_ylim(min_pred,max_pred)
-        plt.xlabel("log-true")
-        plt.ylabel("log-pred")
-        plt.title("overall atac corr")
-    except ValueError:
-        sns.scatterplot(
-            x=true_log[idx],
-            y=pred_log[idx],
-            cmap="viridis")
-        plt.xlabel("log-true")
-        plt.ylabel("log-pred")
-        plt.title("overall atac corr")
-
-    return fig_overall, overall_corr,overall_corr_log
-'''
 
 def mask_ATAC_profile(output_length_ATAC, output_length, crop_size, mask_size,output_res, 
                         peaks_c_crop, randomish_seed, atac_mask_int, atac_mask_dropout):

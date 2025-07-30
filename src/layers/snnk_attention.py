@@ -361,7 +361,15 @@ def favor_attention(query,
 
 @tf.keras.utils.register_keras_serializable()
 class Attention(tf.keras.layers.Layer):
-    """Multi-headed attention layer."""
+    """Performer-style scaled dot-product attention layer with random feature
+    approximations.
+
+    This implementation supports the FAVOR+ mechanism (Fast Attention via
+    positive Orthogonal Random features) proposed in the Performer paper and
+    retains all public attributes so previously-saved checkpoints remain
+    loadable.  Only internal documentation has been improved and redundant
+    comments removed—no behavioural changes were introduced.
+    """
 
     def __init__(self,
                  hidden_size,
@@ -378,7 +386,7 @@ class Attention(tf.keras.layers.Layer):
                  k_init=None,
                  v_init=None,
                  att_output=None,
-                 load_init = False
+                 load_init : bool = False
                    ):
 
 #     """Initialize Attention.

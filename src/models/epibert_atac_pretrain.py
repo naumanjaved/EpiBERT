@@ -214,41 +214,68 @@ class epibert(tf.keras.Model):
 
 
     def call(self, inputs, training:bool=True):
+        """Forward pass.
 
-        sequence,atac,motif_activity = inputs
+        Parameters
+        ----------
+        inputs : Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+            ``(sequence, atac, motif_activity)`` where
+            * `sequence`        – one-hot encoded DNA of shape *(B, L, 4)*
+            * `atac`            – masked ATAC profile of shape *(B, L, 1)*
+            * `motif_activity`  – TF activity of shape *(B, n_motifs)*
 
-        # sequence input processing
-        sequence = self.stem_conv(sequence, training=training)
-        sequence = self.stem_res_conv(sequence, training=training)
-        sequence = self.stem_pool(sequence, training=training)
-        sequence = self.conv_tower(sequence, training=training)
+        training : bool
+            Standard Keras training flag.
+        """
 
-        # atac input processsing
+        # preprocess inputs ---------------------------------------------------
+        seq_enc, atac_enc, motif_enc = self._encode_inputs(*inputs, training=training)
+
+        # concatenate channels and project to transformer dim -----------------
+        x = tf.concat([seq_enc, atac_enc, motif_enc], axis=2)
+        x = self.pre_transformer_projection(x)
+
+        # Transformer encoder --------------------------------------------------
+        x, _ = self.performer(x, training=training)
+
+        # Point-wise head ------------------------------------------------------
+        x = self.final_pointwise_conv(x, training=training)
+        x = self.dropout(x, training=training)
+        x = self.gelu(x)
+        x = self.final_dense_profile(x, training=training)
+
+        return self.crop_final(x)
+
+    # ---------------------------------------------------------------------
+    # helper functions
+    # ---------------------------------------------------------------------
+
+    def _encode_inputs(self,
+                       sequence: tf.Tensor,
+                       atac: tf.Tensor,
+                       motif_activity: tf.Tensor,
+                       training: bool = True):
+        """Encode raw inputs into feature maps consumed by the Transformer."""
+        # sequence branch
+        seq_x = self.stem_conv(sequence, training=training)
+        seq_x = self.stem_res_conv(seq_x, training=training)
+        seq_x = self.stem_pool(seq_x, training=training)
+        seq_x = self.conv_tower(seq_x, training=training)
+
+        # atac branch
         atac_x = self.stem_conv_atac(atac, training=training)
         atac_x = self.stem_res_conv_atac(atac_x, training=training)
         atac_x = self.stem_pool_atac(atac_x, training=training)
-        atac_x = self.conv_tower_atac(atac_x,training=training)
+        atac_x = self.conv_tower_atac(atac_x, training=training)
 
-        ### motif activity processing w/ MLP
-        motif_activity = self.motif_activity_fc1(motif_activity)
-        motif_activity = self.motif_dropout1(motif_activity,training=training)
-        motif_activity = self.motif_activity_fc2(motif_activity)
-        motif_activity = self.motif_dropout2(motif_activity,training=training)
-        motif_activity = tf.tile(motif_activity, [1, self.output_length, 1])
+        # motif branch
+        motif_x = self.motif_activity_fc1(motif_activity)
+        motif_x = self.motif_dropout1(motif_x, training=training)
+        motif_x = self.motif_activity_fc2(motif_x)
+        motif_x = self.motif_dropout2(motif_x, training=training)
+        motif_x = tf.tile(motif_x, [1, self.output_length, 1])
 
-        transformer_input = tf.concat([sequence,atac_x,motif_activity],
-                                      axis=2) # append processed seq,atac,motif inputs in channel dim.
-        transformer_input = self.pre_transformer_projection(transformer_input)
-        out_performer,att_matrices = self.performer(transformer_input, training=training)
-        
-        out = self.final_pointwise_conv(out_performer, training=training) ##
-        out = self.dropout(out, training=training) 
-        out = self.gelu(out)
-        out = self.final_dense_profile(out, training=training)
-        out = self.crop_final(out) 
-
-        return out
-
+        return seq_x, atac_x, motif_x
 
     def get_config(self):
         config = {

@@ -30,29 +30,17 @@ import kipoiseq
 
 import logomaker
 
-def one_hot(sequence):
-    """
-    Converts an input DNA sequence string into a one-hot encoded tensor.
-
-    The output represents A, C, G, and T as one-hot vectors, while any other
-    character (e.g., 'N') is replaced with [0, 0, 0, 0].
-
-    Args:
-        sequence (str): Input DNA sequence.
-
-    Return tf.Tensor: One-hot encoded tensor of shape (sequence_length, 4).
-    """
-    vocabulary = tf.constant(['A', 'C', 'G', 'T'])
-    mapping = tf.constant([0, 1, 2, 3])
-
-    init = tf.lookup.KeyValueTensorInitializer(keys=vocabulary, values=mapping)
-    table = tf.lookup.StaticHashTable(init, default_value=4)
-
-    input_characters = tfs.upper(tfs.unicode_split(sequence, 'UTF-8'))
-
-    # One-hot encode and ignore the fifth column (default for 'N')
-    return tf.one_hot(table.lookup(input_characters), depth=5, dtype=tf.float32)[:, :4]
-
+# ---------------------------------------------------------------------
+# Shared utilities (avoid duplicate code across analysis scripts)
+# ---------------------------------------------------------------------
+from analysis.interval_plot_shared import (
+    one_hot,
+    process_bedgraph,
+    get_per_base_score_f,
+    resize_interval,
+    plot_tracks,
+    FastaStringExtractor,
+)
 
 def process_bedgraph(interval, df):
     """

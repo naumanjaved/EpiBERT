@@ -14,12 +14,7 @@ import src.models.epibert_rampage_finetune as epibert # can toggle which model y
 import src.optimizers as optimizers
 import training_utils_rampage_finetune as training_utils
 import src.schedulers as schedulers
-
-# Function to parse boolean string values
-def parse_bool_str(input_str):
-    if input_str in ['False', 'false', 'FALSE', 'F']:
-        return False
-    return True
+from src.shared_training_utils import parse_bool_str
 
 # Main function definition
 def main():
@@ -65,10 +60,7 @@ def main():
                             'C-' + filter_list_seq.replace(',','_'),
                             'T-' + str(num_transformer_layers),
                             'motif-' + str(use_motif_activity)])
-    date_string = f'{datetime.now():%Y-%m-%d %H:%M:%S%z}'
-    date_string = date_string.replace(' ','_')
-    date_string = f'{datetime.now():%Y-%m-%d %H:%M:%S%z}'
-    date_string = date_string.replace(' ','_')
+    date_string = f'{datetime.now():%Y-%m-%d_%H:%M:%S%z}'.replace(' ', '_')
 
     # defining sweep options, parameters are specified by execute_sweep.sh
     # -----------------------------------------------------------------------------------------------------------

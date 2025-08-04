@@ -15,6 +15,15 @@ src/epibert.egg-info/SOURCES.txt
 src/epibert.egg-info/dependency_links.txt
 src/epibert.egg-info/requires.txt
 src/epibert.egg-info/top_level.txt
+src/epibert/analysis/__init__.py
+src/epibert/analysis/all_genes_predict_grads.py
+src/epibert/analysis/compute_write_attributions.py
+src/epibert/analysis/interval_plotting_consolidated.py
+src/epibert/analysis/test_set_analysis_ATAC.py
+src/epibert/analysis/test_set_analysis_ATAC_baseline.py
+src/epibert/analysis/test_set_analysis_RAMPAGE.py
+src/epibert/analysis/train_model_atac_rampage_test.py
+src/epibert/analysis/training_utils_atac_rampage_test.py
 src/epibert/scripts/__init__.py
 src/epibert/scripts/train_model_atac_pretrain.py
 src/epibert/scripts/train_model_rampage_finetune.py

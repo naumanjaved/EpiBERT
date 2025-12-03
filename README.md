@@ -11,6 +11,9 @@ These notebooks are a work in progress. I will be adding notebooks for variant s
 - [Data preprocessing for model usage](example_usage/data_processing.ipynb)
 - [caQTL scoring and plotting ](example_usage/caqTL_predict.ipynb)
 
+### Model Weights
+Model weights are available for download at [Zenodo](https://zenodo.org/records/14504049) with DOI 10.5281/zenodo.14504048. 
+
 ### Data Availability
 The data for EpiBERT can be found at gs://epibert/data and [here](https://storage.googleapis.com/epibert/data/). The dataset is multiple TB in size and therefore we have turned on the 'requester pays' option in Google Cloud. To access the data you can use the [gsutil](https://cloud.google.com/storage/docs/gsutil) command line and provide a valid GCP billing account. Some sample commands are provided below. Note that transferring and listing data using gsutil does incur a cost. Relevant information can be found [here](https://cloud.google.com/storage/pricing). It is a good idea to estimate the total cost of a transfer based on the destination region and the total amount of data prior to initiating a significant data transfer. Datasets are in tensorflow record format - functions for reading/deserializing/decoding this data are available in the scripts described in 'main_files' directory below. 
 
